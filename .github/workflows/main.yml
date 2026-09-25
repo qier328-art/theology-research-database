@@ -1,0 +1,131 @@
+name: Update Theology Research Database
+
+on:
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-database:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install packages
+        run: |
+          pip install pandas requests
+
+      - name: Update theology database
+        run: |
+          python - <<'PY'
+          import requests
+          import pandas as pd
+          import os
+          from datetime import date, timedelta
+
+          FILE = "theology_latest_research_2020_2026.csv"
+
+          # Search the last 7 days so that temporary API delays
+          # do not cause new records to be missed.
+          today = date.today()
+          start_date = today - timedelta(days=7)
+
+          url = "https://api.openalex.org/works"
+
+          params = {
+              "search": "theology",
+              "filter": (
+                  f"from_publication_date:{start_date},"
+                  f"to_publication_date:{today}"
+              ),
+              "per_page": 100,
+              "sort": "publication_date:desc"
+          }
+
+          print("Querying OpenAlex...")
+          response = requests.get(url, params=params, timeout=60)
+          response.raise_for_status()
+
+          data = response.json()
+          results = data.get("results", [])
+
+          print(f"Found {len(results)} recent records.")
+
+          new_rows = []
+
+          for work in results:
+              authors = work.get("authorships", [])
+
+              author_names = "; ".join(
+                  a.get("author", {}).get("display_name", "")
+                  for a in authors
+                  if a.get("author")
+              )
+
+              primary_location = work.get("primary_location") or {}
+              source = primary_location.get("source") or {}
+
+              new_rows.append({
+                  "研究主题": "theology",
+                  "标题": work.get("display_name", ""),
+                  "作者": author_names,
+                  "发表年份": work.get("publication_year", ""),
+                  "发表日期": work.get("publication_date", ""),
+                  "期刊/来源": source.get("display_name", ""),
+                  "DOI": work.get("doi", ""),
+                  "OpenAlex ID": work.get("id", "")
+              })
+
+          new_df = pd.DataFrame(new_rows)
+
+          if os.path.exists(FILE):
+              old_df = pd.read_csv(FILE)
+          else:
+              old_df = pd.DataFrame()
+
+          # Make sure old data has the columns used by the new database.
+          for column in new_df.columns:
+              if column not in old_df.columns:
+                  old_df[column] = ""
+
+          for column in old_df.columns:
+              if column not in new_df.columns:
+                  new_df[column] = ""
+
+          combined = pd.concat([old_df, new_df], ignore_index=True)
+
+          # Remove duplicates using OpenAlex ID.
+          if "OpenAlex ID" in combined.columns:
+              combined = combined.drop_duplicates(
+                  subset=["OpenAlex ID"],
+                  keep="first"
+              )
+
+          combined.to_csv(FILE, index=False, encoding="utf-8-sig")
+
+          print(f"Database now contains {len(combined)} records.")
+          PY
+
+      - name: Commit updated database
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add theology_latest_research_2020_2026.csv
+
+          if git diff --cached --quiet; then
+            echo "No new records."
+          else
+            git commit -m "Update theology research database"
+            git push
+          fi
