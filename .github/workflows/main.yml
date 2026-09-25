@@ -26,8 +26,6 @@ jobs:
           pip install pandas requests
 
       - name: Update research database
-        env:
-          OPENALEX_API: https://api.openalex.org/works
         run: |
           python - <<'PY'
           import requests
@@ -45,62 +43,87 @@ jobs:
               "per-page": 200
           }
 
-          response = requests.get(url, params=params, timeout=60)
+          response = requests.get(
+              url,
+              params=params,
+              timeout=60
+          )
+
           response.raise_for_status()
 
-          data = response.json()["results"]
+          data = response.json().get("results", [])
 
           records = []
 
           for work in data:
+
               authors = []
 
-              for author in work.get("authorships", []):
-                  name = (author.get("author") or {}).get("display_name")
+              for authorship in work.get("authorships") or []:
+                  author = authorship.get("author") or {}
+                  name = author.get("display_name")
+
                   if name:
                       authors.append(name)
 
+              primary_location = work.get("primary_location") or {}
+              source = primary_location.get("source") or {}
+
               records.append({
-                  "Title": work.get("title", ""),
+                  "Title": work.get("title") or "",
                   "Authors": "; ".join(authors),
-                  "Publication Date": work.get("publication_date", ""),
-                  "Journal": (
-                      (work.get("primary_location") or {})
-                      .get("source", {})
-                      .get("display_name", "")
-                      if work.get("primary_location")
-                      else ""
-                  ),
-                  "DOI": work.get("doi", ""),
-                  "OpenAlex ID": work.get("id", ""),
-                  "URL": work.get("primary_location", {}).get("landing_page_url", "")
-                  if work.get("primary_location")
-                  else ""
+                  "Publication Date": work.get("publication_date") or "",
+                  "Journal": source.get("display_name") or "",
+                  "DOI": work.get("doi") or "",
+                  "OpenAlex ID": work.get("id") or "",
+                  "URL": primary_location.get("landing_page_url") or ""
               })
 
           new_df = pd.DataFrame(records)
 
           if Path(FILE).exists():
-              old_df = pd.read_csv(FILE)
+
+              old_df = pd.read_csv(
+                  FILE,
+                  encoding="utf-8-sig"
+              )
 
               combined = pd.concat(
                   [old_df, new_df],
                   ignore_index=True
               )
 
-              if "DOI" in combined.columns:
-                  combined = combined.drop_duplicates(
+          else:
+
+              combined = new_df
+
+          if "DOI" in combined.columns:
+
+              combined["DOI"] = combined["DOI"].fillna("").astype(str)
+
+              combined = combined[
+                  (combined["DOI"] == "")
+                  | (~combined.duplicated(
                       subset=["DOI"],
                       keep="first"
-                  )
+                  ))
+              ]
 
-              if "OpenAlex ID" in combined.columns:
-                  combined = combined.drop_duplicates(
+          if "OpenAlex ID" in combined.columns:
+
+              combined["OpenAlex ID"] = (
+                  combined["OpenAlex ID"]
+                  .fillna("")
+                  .astype(str)
+              )
+
+              combined = combined[
+                  (combined["OpenAlex ID"] == "")
+                  | (~combined.duplicated(
                       subset=["OpenAlex ID"],
                       keep="first"
-                  )
-          else:
-              combined = new_df
+                  ))
+              ]
 
           combined.to_csv(
               FILE,
@@ -108,7 +131,10 @@ jobs:
               encoding="utf-8-sig"
           )
 
-          print(f"Database now contains {len(combined)} records.")
+          print(
+              f"Database now contains {len(combined)} records."
+          )
+
           PY
 
       - name: Commit updated database
