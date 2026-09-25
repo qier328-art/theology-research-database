@@ -56,7 +56,7 @@ jobs:
               authors = []
 
               for author in work.get("authorships", []):
-                  name = author.get("author", {}).get("display_name")
+                  name = (author.get("author") or {}).get("display_name")
                   if name:
                       authors.append(name)
 
@@ -65,7 +65,7 @@ jobs:
                   "Authors": "; ".join(authors),
                   "Publication Date": work.get("publication_date", ""),
                   "Journal": (
-                      work.get("primary_location", {})
+                      (work.get("primary_location") or {})
                       .get("source", {})
                       .get("display_name", "")
                       if work.get("primary_location")
